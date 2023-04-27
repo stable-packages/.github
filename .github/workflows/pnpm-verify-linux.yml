@@ -1,0 +1,40 @@
+name: pnpm-verify-linux
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        type: string
+        required: false
+        default: "[14, 16, 18]"
+      pnpm-version:
+        type: string
+        required: false
+        default: 7.17.0
+jobs:
+  verify:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+        node-version: ${{ fromJson(inputs.node-version) }}
+    steps:
+      - uses: actions/checkout@v3
+      - uses: pnpm/action-setup@v2
+        with:
+          version: ${{ inputs.pnpm-version }}
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: pnpm
+      # - name: Setup tmate session
+      #   uses: mxschmitt/action-tmate@v3
+      - name: Install Dependencies
+        run: pnpm install
+
+      - name: Verify
+        run: pnpm verify
+
+      - name: codecov
+        if: matrix.os == 'ubuntu-latest' && matrix.node-version == 16
+        uses: codecov/codecov-action@v3
