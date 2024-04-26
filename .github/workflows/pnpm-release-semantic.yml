@@ -5,7 +5,7 @@ on:
       pnpm-version:
         type: string
         required: false
-        default: 7.17.0
+        default: 9.0.6
 
 concurrency: ${{ github.workflow }}-${{ github.ref }}
 
@@ -22,7 +22,7 @@ jobs:
           version: ${{ inputs.pnpm-version }}
       - uses: actions/setup-node@v3
         with:
-          node-version: 18
+          node-version: 20
           cache: pnpm
 
       - name: Install Dependencies

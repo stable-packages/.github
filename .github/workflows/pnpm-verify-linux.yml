@@ -5,11 +5,11 @@ on:
       node-version:
         type: string
         required: false
-        default: "[14, 16, 18]"
+        default: "[18, 20]"
       pnpm-version:
         type: string
         required: false
-        default: 7.17.0
+        default: 9.0.6
 jobs:
   verify:
     runs-on: ${{ matrix.os }}
@@ -36,5 +36,5 @@ jobs:
         run: pnpm verify
 
       - name: codecov
-        if: matrix.os == 'ubuntu-latest' && matrix.node-version == 16
+        if: matrix.os == 'ubuntu-latest' && matrix.node-version == 20
         uses: codecov/codecov-action@v3
