@@ -49,5 +49,6 @@ jobs:
         run: pnpm verify
       - name: Archive production artifacts
         uses: actions/upload-artifact@v4
+        if: matrix.os == 'ubuntu-latest' && matrix.node-version == 20
         with:
           path: ${{ inputs.artifact_paths }}
