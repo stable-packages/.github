@@ -19,6 +19,9 @@ on:
         description: 'Run the build with tmate debugging enabled (https://github.com/marketplace/actions/debugging-with-tmate)'
         required: false
         default: false
+      codecov_flags:
+        type: string
+        required: false
 jobs:
   verify:
     runs-on: ${{ matrix.os }}
@@ -44,9 +47,13 @@ jobs:
 
       - name: Verify
         run: pnpm verify
+      - name: Archive production artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          path: |
+            **/cjs/
+            **/coverage/
+            **/dist/
+            **/esm/
+            **/lib/
 
-      - name: codecov
-        if: matrix.os == 'ubuntu-latest' && matrix.node-version == 20
-        uses: codecov/codecov-action@v3
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
