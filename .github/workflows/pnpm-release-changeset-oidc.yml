@@ -1,0 +1,104 @@
+name: pnpm-release-changeset-oidc
+# Secretless variant of pnpm-release-changeset.yml.
+#
+# Differences from that workflow:
+#   - No CI_GITHUB_TOKEN. Uses the built-in GITHUB_TOKEN with elevated `permissions`.
+#     Trade-off: a PR opened with GITHUB_TOKEN does not trigger `on: pull_request`
+#     workflows, so the "version packages" PR gets no status checks. That is fine for a
+#     mechanical version + changelog bump, since the release job only runs after the
+#     push to the base branch has already been verified.
+#   - No NPM_TOKEN. Publishes via npm trusted publishing (OIDC), which also emits
+#     provenance attestations. Each package must have a trusted publisher registered at
+#     npmjs.com/package/<name>/access naming the repo and the *caller* workflow's
+#     filename (release.yml), not this file. Until that registration exists, publishing
+#     fails with a 404 on PUT — npm returns 404 rather than 403 so it does not leak
+#     whether the package exists.
+#
+# Why bother, given this org has a secret scope: the org's NPM_TOKEN was created
+# 2023-05-11 and had expired silently. Nothing surfaced it — `global-store` simply
+# stopped reaching the registry, and sat at 1.0.0-beta.21 while `main` moved on. That is
+# the characteristic failure of a long-lived credential. OIDC credentials are minted per
+# run and last minutes.
+#
+# NOTE ON THE ACTION VERSION: this uses changesets/action@v1 deliberately, because
+# consumers here are on @changesets/cli v2. changesets/action@v2 refuses to run against
+# CLI v2 outright ("Changesets CLI v2 is not supported"). If a consumer moves to CLI v3,
+# it needs the v2 action, whose inputs are also renamed (version -> version-script,
+# publish -> publish-script, commit -> commit-message) — the old names are silently
+# ignored, so a half-done migration leaves the action running with no publish script.
+on:
+  workflow_call:
+    inputs:
+      pnpm-version:
+        type: string
+        required: false
+        default: 9.0.6
+      node-version:
+        type: string
+        required: false
+        default: '20'
+    outputs:
+      published:
+        description: 'Whether the release was published'
+        value: ${{ jobs.release.outputs.published }}
+
+permissions:
+  # Mints the OIDC token npm exchanges for short-lived publish credentials.
+  id-token: write
+  # Lets changesets/action push the version branch and tags.
+  contents: write
+  # Lets changesets/action open the "version packages" PR.
+  pull-requests: write
+
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    outputs:
+      published: ${{ steps.changesets.outputs.published }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ inputs.pnpm-version }}
+
+      # No `registry-url:` on purpose. It exists only to write an auth stanza
+      # (`//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`) into a temp .npmrc,
+      # which this secretless workflow can never fill in. Every npm and pnpm call then
+      # warns "Failed to replace env in config", and `changeset publish`'s
+      # "is this version already published?" probe comes back empty, so it tries to
+      # republish an existing version and dies on npm's E403.
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: pnpm
+
+      # Trusted publishing needs npm >= 11.5.1, newer than what Node 20 bundles.
+      #
+      # Pinned to 11, not latest: npm 12 changed `npm info --json` to wrap its output in
+      # an array (changesets/changesets#2164). @changesets/cli 2.x reads `.versions`
+      # straight off the parsed value, sees undefined, concludes every version is
+      # unpublished, and republishes into E403.
+      - name: Ensure npm supports trusted publishing
+        run: |
+          npm install -g npm@11
+          npm --version
+
+      - name: Install Dependencies
+        run: pnpm install
+
+      - run: pnpm build
+
+      - name: Create Release Pull Request or Publish to npm
+        id: changesets
+        uses: changesets/action@v1
+        with:
+          commit: 'chore: version packages'
+          version: pnpm run version
+          publish: pnpm run release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
