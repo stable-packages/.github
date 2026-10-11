@@ -1,6 +1,18 @@
 name: yarn-release-changeset
+# The "version packages" PR is opened with a repobuddy GitHub App token when the caller
+# passes RELEASE_APP_ID and RELEASE_APP_PRIVATE_KEY. A PR opened with GITHUB_TOKEN does
+# not trigger `on: pull_request` workflows, so its required checks never report and it
+# can only be merged by an admin; the app token does trigger them. Without those secrets
+# the job falls back to the built-in GITHUB_TOKEN.
 on:
   workflow_call:
+    secrets:
+      RELEASE_APP_ID:
+        required: false
+      RELEASE_APP_PRIVATE_KEY:
+        required: false
+      NPM_TOKEN:
+        required: false
 
 concurrency: ${{ github.workflow }}-${{ github.ref }}
 
@@ -9,8 +21,20 @@ jobs:
     runs-on: ubuntu-latest
     env:
       YARN_ENABLE_IMMUTABLE_INSTALLS: false
+      HAS_RELEASE_APP: ${{ secrets.RELEASE_APP_ID != '' && secrets.RELEASE_APP_PRIVATE_KEY != '' }}
     steps:
+      - uses: actions/create-github-app-token@v3
+        if: env.HAS_RELEASE_APP == 'true'
+        id: app-token
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      # The version branch is pushed with the checkout's credentials, so the app token
+      # goes here too; otherwise the push would not re-trigger the PR's checks.
       - uses: actions/checkout@v3
+        with:
+          token: ${{ steps.app-token.outputs.token || github.token }}
 
       - uses: actions/setup-node@v3
         with:
@@ -28,7 +52,7 @@ jobs:
           commit: 'chore: version packages'
           version: yarn version
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
 
       - name: set npmAuthToken
         if: steps.changesets.outputs.hasChangesets == 'false'
