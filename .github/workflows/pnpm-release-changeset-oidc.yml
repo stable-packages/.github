@@ -33,33 +33,30 @@ name: pnpm-release-changeset-oidc
 #   - No NPM_TOKEN. Publishes via npm trusted publishing (OIDC), which also emits
 #     provenance attestations. Each package must have a trusted publisher registered at
 #     npmjs.com/package/<name>/access naming the repo and the *caller* workflow's
-#     filename (release.yml), not this file. Until that registration exists, publishing
-#     fails with a 404 on PUT — npm returns 404 rather than 403 so it does not leak
-#     whether the package exists.
+#     filename (release.yml), not this file.
 #
-# Why bother, given this org has a secret scope: the org's NPM_TOKEN was created
-# 2023-05-11 and had expired silently. Nothing surfaced it — `global-store` simply
-# stopped reaching the registry, and sat at 1.0.0-beta.21 while `main` moved on. That is
-# the characteristic failure of a long-lived credential. OIDC credentials are minted per
-# run and last minutes.
+# stable-packages does have an org secret scope, so unlike the unional copy the argument here is
+# not "there is nowhere to put a token". It is that CI_GITHUB_TOKEN and NPM_TOKEN are
+# long-lived credentials that expire silently and are worth stealing: an expired
+# NPM_TOKEN is what left color-map not publishing for three months without anyone
+# noticing. OIDC credentials are minted per run and last minutes.
 #
-# NOTE ON THE ACTION VERSION: this uses changesets/action@v1 deliberately, because
-# consumers here are on @changesets/cli v2. changesets/action@v2 refuses to run against
-# CLI v2 outright ("Changesets CLI v2 is not supported"). If a consumer moves to CLI v3,
-# it needs the v2 action, whose inputs are also renamed (version -> version-script,
-# publish -> publish-script, commit -> commit-message) — the old names are silently
-# ignored, so a half-done migration leaves the action running with no publish script.
+# Mirrors unional/.github's workflow of the same name. The executable YAML is identical
+# except that only this copy has the step that approves the version PR's runs, and
+# declares no top-level `permissions:`. Change both or neither.
+#
+# Added alongside pnpm-release-changeset.yml rather than replacing it, so repos that have
+# not migrated keep working.
 on:
   workflow_call:
     inputs:
       pnpm-version:
         type: string
         required: false
-        default: 9.0.6
       node-version:
         type: string
         required: false
-        default: '20'
+        default: lts/*
     outputs:
       published:
         description: 'Whether the release was published'
@@ -73,31 +70,37 @@ jobs:
     outputs:
       published: ${{ steps.changesets.outputs.published }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: pnpm/action-setup@v4
-        with:
-          version: ${{ inputs.pnpm-version }}
+      # Version comes from `packageManager` in package.json unless overridden.
+      - uses: pnpm/action-setup@v6
 
-      # No `registry-url:` on purpose. It exists only to write an auth stanza
-      # (`//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`) into a temp .npmrc,
-      # which this secretless workflow can never fill in. Every npm and pnpm call then
-      # warns "Failed to replace env in config", and `changeset publish`'s
-      # "is this version already published?" probe comes back empty, so it tries to
-      # republish an existing version and dies on npm's E403.
-      - uses: actions/setup-node@v5
+      # No `registry-url:` on purpose. It only exists to write an auth stanza —
+      # `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}` in a temp .npmrc — which
+      # this secretless workflow can never fill in. Every npm and pnpm invocation then
+      # warns "Failed to replace env in config", and worse, `changeset publish`'s
+      # "is this version already on the registry?" probe comes back empty, so it tries
+      # to publish an already-published version and dies on npm's E403
+      # "You cannot publish over the previously published versions". The registry itself
+      # is not at stake: npmjs.org is npm's default, and repos that care say so in their
+      # own .npmrc.
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ inputs.node-version }}
           cache: pnpm
 
-      # Trusted publishing needs npm >= 11.5.1, newer than what Node 20 bundles.
+      # Trusted publishing requires npm 11.5.1+, so Node LTS's bundled npm may be too old.
       #
-      # Pinned to 11, not latest: npm 12 changed `npm info --json` to wrap its output in
-      # an array (changesets/changesets#2164). @changesets/cli 2.x reads `.versions`
-      # straight off the parsed value, sees undefined, concludes every version is
-      # unpublished, and republishes into E403.
+      # Pinned to 11 rather than latest: npm 12 changed `npm info --json` to wrap its
+      # output in an array (changesets/changesets#2164). @changesets/cli 2.x reads
+      # `.versions` straight off the parsed value, sees undefined, concludes every
+      # version is unpublished and republishes into E403. cli 3.x fixed that for its npm
+      # code path but NOT its pnpm one, and `pnpm info` just delegates to whichever npm
+      # is on PATH — so on a pnpm workspace npm 12 turns the E403 into a TypeError in
+      # getUnpublishedPackages instead. Pinning npm keeps both majors of changesets
+      # working; revisit once the pnpm parser upstream unwraps the array too.
       - name: Ensure npm supports trusted publishing
         run: |
           npm install -g npm@11
@@ -108,22 +111,30 @@ jobs:
 
       - run: pnpm build
 
+      # changesets/action v2 is the release matched to @changesets/cli v3, which every
+      # caller now needs: npm 12 changed `npm info --json` to emit an array, and cli 2.x
+      # reads `.versions` straight off the parsed object. It comes back undefined, every
+      # version looks unpublished, and the release republishes into npm's E403
+      # "You cannot publish over the previously published versions".
+      #
+      # v2 renamed the inputs (version -> version-script, publish -> publish-script,
+      # commit -> commit-message) and dropped the GITHUB_TOKEN *env var* in favour of the
+      # github-token *input*. The old names are silently ignored, so a half-done bump
+      # leaves the action running with no publish script at all.
       - name: Create Release Pull Request or Publish to npm
         id: changesets
-        uses: changesets/action@v1
+        uses: changesets/action@v2.1.2
         with:
-          commit: 'chore: version packages'
-          version: pnpm run version
-          publish: pnpm run release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: 'chore: version packages'
+          version-script: pnpm run version
+          publish-script: pnpm run release
 
       # github-actions[bot] opens and pushes the version PR, so GitHub parks the PR's
       # pull_request runs (CI, CodeQL) as action_required until someone approves them.
       # Approve them so they run against the PR; see the header. A failed approval warns
       # rather than failing an otherwise good release.
       - name: Approve the version packages PR's pending runs
-        if: steps.changesets.outputs.pullRequestNumber != '' && steps.changesets.outputs.published != 'true'
+        if: steps.changesets.outputs.pr-number != '' && steps.changesets.outputs.published != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION_BRANCH: changeset-release/${{ github.ref_name }}
