@@ -2,34 +2,47 @@ name: build-docs
 on:
   workflow_call:
     inputs:
-      publish_dir:
-        type: string
-        required: false
-        default: ./docs
       pnpm-version:
         type: string
         required: false
-        default: 9.0.6
+      publish-dir:
+        type: string
+        required: false
+        default: ./docs
+
 jobs:
   npm:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: pnpm/action-setup@v2
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
-          version: ${{ inputs.pnpm-version }}
-      - uses: actions/setup-node@v3
-        with:
-          node-version: 20
           cache: pnpm
 
       - run: pnpm install
-      - run: pnpm build
       - run: pnpm build:doc
+      - name: Verify the docs directory exists
+        # A missing publish-dir used to be silent: peaceiris/actions-gh-pages happily
+        # pushes an empty tree, so the job went green while publishing nothing. That is
+        # exactly how justland/just-web.github.io shipped an empty gh-pages branch
+        # (one 0-byte .nojekyll) across every "successful" deploy until 2026-09-03.
+        # Fail loudly instead. The default below is a convention, not a guarantee.
+        run: |
+          dir="${{ inputs.publish-dir }}"
+          if [ ! -d "$dir" ]; then
+            echo "::error::publish-dir '$dir' does not exist after the docs build."
+            echo "::error::Pass publish-dir explicitly, e.g. publish-dir: ./docusaurus/build"
+            exit 1
+          fi
+          if [ -z "$(ls -A "$dir")" ]; then
+            echo "::error::publish-dir '$dir' is empty; refusing to publish an empty site."
+            exit 1
+          fi
       - name: publish docs
-        uses: peaceiris/actions-gh-pages@v3
+        uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ${{ inputs.publish_dir }}
+          publish_dir: ${{ inputs.publish-dir }}
